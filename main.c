@@ -117,6 +117,7 @@ void download_file(const char *url, memory *out) {
     curl_easy_setopt(curl, CURLOPT_WRITEDATA, out);
 
     curl_easy_perform(curl);
+    curl_easy_cleanup(curl);
 }
 
 int download_bang_last_version(const char *base_dir) {
@@ -144,7 +145,7 @@ int download_bang_last_version(const char *base_dir) {
             make_dir(base_dir);
         }
 
-        printf("In scaricamento: %s\n", info.zip_url);
+        printf("Download: %s\n", info.zip_url);
 
         memory mem;
         memset(&mem, 0, sizeof(mem));
@@ -174,7 +175,7 @@ int download_bang_last_version(const char *base_dir) {
 
                 zip_file_t *file_in = zip_fopen_index(archive, i, 0);
                 if (file_in) {
-                    printf("In installazione: %s\n", path);
+                    printf("Install: %s\n", path);
                     char buffer[BUFFER_SIZE];
                     
                     while (zip_file_size != 0) {
