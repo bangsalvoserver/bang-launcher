@@ -1,0 +1,9 @@
+[submodule "external/cjson"]
+	path = external/cjson
+	url = https://github.com/DaveGamble/cJSON
+[submodule "external/libzip"]
+	path = external/libzip
+	url = https://github.com/nih-at/libzip
+[submodule "external/libcurl"]
+	path = external/libcurl
+	url = https://github.com/curl/curl
