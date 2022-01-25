@@ -4,103 +4,27 @@
 #include <zip.h>
 
 #include "sys_windows.h"
-#include <WinInet.h>
+#include "resources.h"
 
-#define BUFFER_SIZE 1024
-#define STRING_SIZE 256
+#define WM_INSTALL_FINISHED WM_USER + 1
 
-#define error_ok                0
-#define error_cant_init_inet    1
-#define error_cant_access_site  2
-#define error_cant_parse_json   3
-#define error_no_release_found  4
+const char ClassName[] = "MainWindowClass";
 
-#define download_query_size ((size_t) -1)
-#define download_bar_size 100
+HWND hWndMain;
+HWND hWndProgressBar;
+HWND hWndStatus;
 
-typedef struct _bang_zip_information {
+HANDLE hDownload;
+
+const char *bang_base_dir;
+
+struct {
     char version[STRING_SIZE];
     char zip_url[STRING_SIZE];
     size_t zip_size;
 } bang_zip_information;
 
-typedef struct _memory {
-    char *data;
-    size_t size;
-} memory;
-
-typedef void (*downloading_callback) (int bytes_read, int bytes_total);
-
-int download_file(memory *mem, const char *url, size_t download_size, downloading_callback callback) {
-    int errcode = error_ok;
-
-    HINTERNET hInternet = NULL;
-    HINTERNET hConnect = NULL;
-
-    char buffer[BUFFER_SIZE];
-
-    if (!(hInternet = InternetOpen(
-        "Mozilla/5.0",
-        INTERNET_OPEN_TYPE_DIRECT,
-        NULL,
-        NULL,
-        0
-    ))) {
-        errcode = error_cant_init_inet;
-        goto finish;
-    }
-
-    if (!(hConnect = InternetOpenUrlA(hInternet, url, NULL, 0, 0, (DWORD_PTR) NULL))) {
-        errcode = error_cant_access_site;
-        goto finish;
-    }
-
-    size_t remaining_bytes = download_size;
-    while (1) {
-        DWORD bytes_to_read = 0, bytes_read = 0;
-
-        if (download_size == download_query_size) {
-            if (!InternetQueryDataAvailable(hConnect, &bytes_to_read, 0, 0)) {
-                errcode = error_cant_access_site;
-                goto finish;
-            }
-        } else {
-            bytes_to_read = remaining_bytes;
-        }
-
-        if (bytes_to_read > BUFFER_SIZE) {
-            bytes_to_read = BUFFER_SIZE;
-        } else if (bytes_to_read == 0) {
-            break;
-        }
-
-        memset(buffer, 0, BUFFER_SIZE);
-        if (!InternetReadFile(hConnect, buffer, bytes_to_read, &bytes_read)) {
-            errcode = error_cant_access_site;
-            goto finish;
-        }
-
-        mem->data = realloc(mem->data, mem->size + bytes_read);
-        memcpy(mem->data + mem->size, buffer, bytes_read);
-        mem->size += bytes_read;
-
-        if (callback) {
-            callback(mem->size, download_size);
-        }
-
-        if (download_size != download_query_size) {
-            remaining_bytes -= bytes_read;
-        }
-    }
-
-finish:
-    if (errcode && mem->data) free(mem->data);
-    if (hConnect) InternetCloseHandle(hConnect);
-    if (hInternet) InternetCloseHandle(hInternet);
-    return errcode;
-}
-
-int get_bang_version(cJSON *latest, bang_zip_information *out) {
+int get_bang_version(cJSON *latest) {
     if (!cJSON_IsObject(latest)) return 1;
 
     cJSON *assets = cJSON_GetObjectItemCaseSensitive(latest, "assets");
@@ -115,18 +39,18 @@ int get_bang_version(cJSON *latest, bang_zip_information *out) {
     cJSON *json_zip_url = cJSON_GetObjectItemCaseSensitive(asset, "browser_download_url");
     if (!json_zip_url || !cJSON_IsString(json_zip_url)) return 1;
 
-    strncpy(out->version, cJSON_GetStringValue(json_version), STRING_SIZE);
-    strncpy(out->zip_url, cJSON_GetStringValue(json_zip_url), STRING_SIZE);
+    strncpy(bang_zip_information.version, cJSON_GetStringValue(json_version), STRING_SIZE);
+    strncpy(bang_zip_information.zip_url, cJSON_GetStringValue(json_zip_url), STRING_SIZE);
 
     cJSON *json_zip_size = cJSON_GetObjectItemCaseSensitive(asset, "size");
     if (!json_zip_url || !cJSON_IsNumber(json_zip_size)) return 1;
 
-    out->zip_size = (int) cJSON_GetNumberValue(json_zip_size);
+    bang_zip_information.zip_size = (int) cJSON_GetNumberValue(json_zip_size);
     
     return 0;
 }
 
-int get_bang_latest_version(bang_zip_information *out) {
+int get_bang_latest_version() {
     memory mem;
     memset(&mem, 0, sizeof(mem));
     
@@ -134,7 +58,7 @@ int get_bang_latest_version(bang_zip_information *out) {
     if (errcode == error_ok) {
         cJSON *json = cJSON_ParseWithLength(mem.data, mem.size);
         if (json) {
-            if (get_bang_version(json, out) == 0) {
+            if (get_bang_version(json) == 0) {
                 errcode = error_ok;
             } else {
                 errcode = error_no_release_found;
@@ -150,118 +74,223 @@ int get_bang_latest_version(bang_zip_information *out) {
     return errcode;
 }
 
+void set_status(const char *format, ...) {
+    va_list arg;
+    char buffer[256];
+
+    va_start(arg, format);
+    vsnprintf(buffer, 256, format, arg);
+    va_end(arg);
+
+    SendMessage(hWndStatus, SB_SETTEXT, MAKEWPARAM(0, 0), buffer);
+}
+
 void print_download_status(int bytes_read, int bytes_total) {
-    static int boxes_so_far = 0;
+    SendMessage(hWndProgressBar, PBM_SETRANGE, 0, MAKELPARAM(0, 0xff));
+    SendMessage(hWndProgressBar, PBM_SETPOS, (float) bytes_read / bytes_total * 0xff, 0);
 
-    const int box_bytes = bytes_total / download_bar_size;
-    int nboxes = bytes_read / box_bytes - boxes_so_far;
-    
-    if (nboxes > 0) boxes_so_far = bytes_read / box_bytes;
-    for (; nboxes > 0; --nboxes) printf("*");
+    set_status("Download: %s ... %d %%", bang_zip_information.version, (int)((float) bytes_read / bytes_total * 100));
 }
 
-int download_bang_last_version(const char *base_dir) {
-    bang_zip_information info;
-    memset(&info, 0, sizeof(info));
+DWORD download_bang_latest_version(void *param) {
+    set_status("Download: %s...", bang_zip_information.version);
 
-    int errcode = get_bang_latest_version(&info);
-    if (errcode == error_ok) {
-        printf("Latest version: %s\n", info.version);
+    memory mem;
+    memset(&mem, 0, sizeof(mem));
 
-        if (file_exists(base_dir)) {
-            FILE *file = fopen(concat_path(base_dir, "version.txt"), "r");
-            if (file) {
-                char version[STRING_SIZE];
-                if (fgets(version, STRING_SIZE, file)) {
-                    version[strlen(version)-1] = '\0';
-                    fclose(file);
-                    if (strcmp(info.version, version) == 0) {
-                        return error_ok;
-                    }
+    download_file(&mem, bang_zip_information.zip_url, bang_zip_information.zip_size, print_download_status);
+    zip_error_t error;
+    zip_source_t *source = zip_source_buffer_create(mem.data, mem.size, 1, &error);
+    zip_t *archive = zip_open_from_source(source, 0, &error);
+
+    zip_int64_t num_entries = zip_get_num_entries(archive, 0);
+    for (zip_int64_t i=0; i<num_entries; ++i) {
+        const char *path_basename = strchr(zip_get_name(archive, i, 0), '/') + 1;
+        if (path_basename) {
+            const char *path = concat_path(bang_base_dir, path_basename);
+            size_t file_size = get_file_size(path);
+
+            zip_stat_t stat;
+            if (zip_stat_index(archive, i, ZIP_STAT_SIZE, &stat) != 0) continue;
+
+            zip_int64_t zip_file_size = stat.size;
+
+            if (file_size == zip_file_size) continue;
+
+            FILE *file_out = fopen(path, "wb");
+            if (!file_out) continue;
+
+            zip_file_t *file_in = zip_fopen_index(archive, i, 0);
+            if (file_in) {
+                set_status("Install: %s", path);
+                char buffer[BUFFER_SIZE];
+                
+                while (zip_file_size != 0) {
+                    zip_int64_t nbytes = zip_fread(file_in, buffer, BUFFER_SIZE);
+                    fwrite(buffer, nbytes, 1, file_out);
+                    zip_file_size -= nbytes;
                 }
+
+                zip_fclose(file_in);
             }
-        } else {
-            make_dir(base_dir);
+            fclose(file_out);
         }
-
-        printf("Download: %s (%d bytes)\n", info.zip_url, info.zip_size);
-
-        memory mem;
-        memset(&mem, 0, sizeof(mem));
-
-        download_file(&mem, info.zip_url, info.zip_size, print_download_status);
-        printf("\n");
-        zip_error_t error;
-        zip_source_t *source = zip_source_buffer_create(mem.data, mem.size, 1, &error);
-        zip_t *archive = zip_open_from_source(source, 0, &error);
-
-        zip_int64_t num_entries = zip_get_num_entries(archive, 0);
-        for (zip_int64_t i=0; i<num_entries; ++i) {
-            const char *path_basename = strchr(zip_get_name(archive, i, 0), '/') + 1;
-            if (path_basename) {
-                const char *path = concat_path(base_dir, path_basename);
-                size_t file_size = get_file_size(path);
-
-                zip_stat_t stat;
-                if (zip_stat_index(archive, i, ZIP_STAT_SIZE, &stat) != 0) continue;
-
-                zip_int64_t zip_file_size = stat.size;
-
-                if (file_size == zip_file_size) continue;
-
-                FILE *file_out = fopen(path, "wb");
-                if (!file_out) continue;
-
-                zip_file_t *file_in = zip_fopen_index(archive, i, 0);
-                if (file_in) {
-                    printf("Install: %s\n", path);
-                    char buffer[BUFFER_SIZE];
-                    
-                    while (zip_file_size != 0) {
-                        zip_int64_t nbytes = zip_fread(file_in, buffer, BUFFER_SIZE);
-                        fwrite(buffer, nbytes, 1, file_out);
-                        zip_file_size -= nbytes;
-                    }
-
-                    zip_fclose(file_in);
-                }
-                fclose(file_out);
-            }
-        }
-
-        zip_close(archive);
-
-        FILE *version_file = fopen(concat_path(base_dir, "version.txt"), "w");
-        fprintf(version_file, "%s\n", info.version);
-        fclose(version_file);
     }
-    return errcode;
+
+    zip_close(archive);
+
+    FILE *version_file = fopen(concat_path(bang_base_dir, "version.txt"), "w");
+    fprintf(version_file, "%s\n", bang_zip_information.version);
+    fclose(version_file);
+
+    SendMessage(hWndMain, WM_INSTALL_FINISHED, 0, 0);
+    return 0;
 }
 
-int main(int argc, char **argv) {
-    const char *base_dir = get_bin_path();
+LRESULT CALLBACK WndProc(HWND hWnd, UINT Msg, WPARAM wParam, LPARAM lParam) {
+    switch (Msg) {
+    case WM_CREATE: {
+        hWndProgressBar = CreateWindowEx(
+            0,
+            PROGRESS_CLASS,
+            (LPSTR)NULL,
+            WS_VISIBLE | WS_CHILD,
+            10,
+            10,
+            360,
+            20,
+            hWnd,
+            (HMENU)IDPB_PROGRESS_BAR,
+            (HINSTANCE)GetWindowLong(hWnd, GWLP_HINSTANCE),
+            NULL);
 
-    switch (download_bang_last_version(base_dir)) {
-    case error_ok:
-        if (argc > 1 && strcmp(argv[1], "server") == 0) {
-            launch_process(concat_path(base_dir, "bangserver.exe"));
-        } else {
-            launch_process(concat_path(base_dir, "bangclient.exe"));
-        }
+        hWndStatus = CreateWindowEx(
+            0,
+            STATUSCLASSNAME,
+            (LPSTR)NULL,
+            WS_CHILD | WS_VISIBLE,
+            0, 0, 0, 0,
+            hWnd,
+            (HMENU)IDPB_STATUS_BAR,
+            (HINSTANCE)GetWindowLong(hWnd, GWLP_HINSTANCE),
+            NULL);
+
+        hDownload = CreateThread(NULL, 0, download_bang_latest_version, NULL, 0, NULL);
         break;
+    }
+    case WM_INSTALL_FINISHED:
+        launch_process(concat_path(bang_base_dir, "bangclient.exe"));
+        // fall through
+    case WM_DESTROY:
+        PostQuitMessage(0);
+        break;
+    case WM_CLOSE:
+        TerminateThread(hDownload, 0);
+        // fall through
+    default:
+        return (DefWindowProc(hWnd, Msg, wParam, lParam));
+    }
+    return 0;
+}
+
+void show_error_message(int errcode) {
+    switch (errcode) {
     case error_cant_init_inet:
-        fprintf(stderr, "Could not init WinInet\n");
+        message_box("Could not init WinInet", MB_ICONERROR);
         break;
     case error_cant_access_site:
-        fprintf(stderr, "Could not access site\n");
+        message_box("Could not access site", MB_ICONERROR);
         break;
     case error_cant_parse_json:
-        fprintf(stderr, "Could not parse json output\n");
+        message_box("Could not parse json output", MB_ICONERROR);
         break;
     case error_no_release_found:
-        fprintf(stderr, "No release found\n");
+        message_box("No release found", MB_ICONERROR);
         break;
     }
+}
 
-    return 0;
+BOOL must_download_latest_version() {
+    if (file_exists(bang_base_dir)) {
+        FILE *file = fopen(concat_path(bang_base_dir, "version.txt"), "r");
+        if (file) {
+            char version[STRING_SIZE];
+            if (fgets(version, STRING_SIZE, file)) {
+                version[strlen(version)-1] = '\0';
+                fclose(file);
+                if (strcmp(bang_zip_information.version, version) == 0) {
+                    return FALSE;
+                }
+            }
+        }
+    } else {
+        make_dir(bang_base_dir);
+    }
+    return TRUE;
+}
+
+INT WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine, INT nCmdShow) {
+    InitCommonControls();
+    WNDCLASSEX wc;
+    wc.cbSize = sizeof(WNDCLASSEX);
+    wc.style = 0;
+    wc.lpfnWndProc = (WNDPROC)WndProc;
+    wc.cbClsExtra = 0;
+    wc.cbWndExtra = 0;
+    wc.hInstance = hInstance;
+    wc.hIcon = LoadIcon(hInstance, MAKEINTRESOURCE(IDI_ICON));
+    wc.hIconSm = LoadIcon(hInstance, MAKEINTRESOURCE(IDI_ICON));
+    wc.hCursor = LoadCursor(NULL, IDC_ARROW);
+    wc.hbrBackground = (HBRUSH)(COLOR_WINDOW + 1);
+    wc.lpszMenuName = NULL;
+    wc.lpszClassName = ClassName;
+
+    if (!RegisterClassEx(&wc)) {
+        MessageBox(NULL, "Failed To Register The Window Class.", "Error", MB_OK | MB_ICONERROR);
+        return 0;
+    }
+    
+    memset(&bang_zip_information, 0, sizeof(bang_zip_information));
+
+    bang_base_dir = get_bang_bin_path();
+    int errcode = get_bang_latest_version();
+    if (errcode != error_ok) {
+        show_error_message(errcode);
+        return 0;
+    }
+
+    if (must_download_latest_version()) {
+        hWndMain = CreateWindowEx(
+            WS_EX_CLIENTEDGE,
+            ClassName,
+            "Bang! Launcher",
+            WS_CAPTION | WS_SYSMENU | WS_MINIMIZEBOX,
+            CW_USEDEFAULT,
+            CW_USEDEFAULT,
+            400,
+            100,
+            NULL,
+            NULL,
+            hInstance,
+            NULL);
+
+        if (!hWndMain) {
+            MessageBox(NULL, "Window Creation Failed.", "Error", MB_OK | MB_ICONERROR);
+            return 0;
+        }
+
+        ShowWindow(hWndMain, SW_SHOW);
+        UpdateWindow(hWndMain);
+
+        MSG Msg;
+        while (GetMessage(&Msg, NULL, 0, 0)) {
+            TranslateMessage(&Msg);
+            DispatchMessage(&Msg);
+        }
+
+        return Msg.wParam;
+    } else {
+        launch_process(concat_path(bang_base_dir, "bangclient.exe"));
+        return 0;
+    }
 }

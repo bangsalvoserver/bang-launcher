@@ -4,6 +4,97 @@
 #include <Windows.h>
 #include <Shlwapi.h>
 #include <ShlObj.h>
+#include <WinInet.h>
+
+typedef struct _memory {
+    char *data;
+    size_t size;
+} memory;
+
+#define BUFFER_SIZE 1024
+#define STRING_SIZE 256
+
+#define error_ok                0
+#define error_cant_init_inet    1
+#define error_cant_access_site  2
+#define error_cant_parse_json   3
+#define error_no_release_found  4
+
+#define download_query_size ((size_t) -1)
+
+typedef void (*downloading_callback) (int bytes_read, int bytes_total);
+
+static int download_file(memory *mem, const char *url, size_t download_size, downloading_callback callback) {
+    int errcode = error_ok;
+
+    HINTERNET hInternet = NULL;
+    HINTERNET hConnect = NULL;
+
+    char buffer[BUFFER_SIZE];
+
+    if (!(hInternet = InternetOpen(
+        "Mozilla/5.0",
+        INTERNET_OPEN_TYPE_DIRECT,
+        NULL,
+        NULL,
+        0
+    ))) {
+        errcode = error_cant_init_inet;
+        goto finish;
+    }
+
+    if (!(hConnect = InternetOpenUrlA(hInternet, url, NULL, 0, 0, (DWORD_PTR) NULL))) {
+        errcode = error_cant_access_site;
+        goto finish;
+    }
+
+    size_t remaining_bytes = download_size;
+    while (1) {
+        DWORD bytes_to_read = 0, bytes_read = 0;
+
+        if (download_size == download_query_size) {
+            if (!InternetQueryDataAvailable(hConnect, &bytes_to_read, 0, 0)) {
+                errcode = error_cant_access_site;
+                goto finish;
+            }
+        } else {
+            bytes_to_read = remaining_bytes;
+        }
+
+        if (bytes_to_read > BUFFER_SIZE) {
+            bytes_to_read = BUFFER_SIZE;
+        } else if (bytes_to_read == 0) {
+            break;
+        }
+
+        memset(buffer, 0, BUFFER_SIZE);
+        if (!InternetReadFile(hConnect, buffer, bytes_to_read, &bytes_read)) {
+            errcode = error_cant_access_site;
+            goto finish;
+        }
+
+        mem->data = realloc(mem->data, mem->size + bytes_read);
+        memcpy(mem->data + mem->size, buffer, bytes_read);
+        mem->size += bytes_read;
+
+        if (callback) {
+            callback(mem->size, download_size);
+        }
+
+        if (download_size != download_query_size) {
+            remaining_bytes -= bytes_read;
+        }
+    }
+
+finish:
+    if (hConnect) InternetCloseHandle(hConnect);
+    if (hInternet) InternetCloseHandle(hInternet);
+    return errcode;
+}
+
+static void message_box(const char *message, int flags) {
+    MessageBox(NULL, message, "Bang!", MB_OK | flags);
+}
 
 static void launch_process(const char *filename) {
     STARTUPINFO info;
@@ -17,7 +108,7 @@ static void launch_process(const char *filename) {
     }
 }
 
-static const char *get_bin_path() {
+static const char *get_bang_bin_path() {
     static char path[MAX_PATH];
     if (SUCCEEDED(SHGetFolderPathA(NULL, CSIDL_APPDATA, NULL, 0, path))) {
         PathAppendA(path, "bang-sdl\\bin");
