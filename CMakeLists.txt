@@ -5,14 +5,6 @@ set(CMAKE_FIND_LIBRARY_SUFFIXES ".a")
 
 set(BUILD_SHARED_LIBS OFF CACHE BOOL "")
 
-set(BUILD_CURL_EXE OFF CACHE BOOL "")
-set(OPENSSL_USE_STATIC_LIBS ON CACHE BOOL "")
-set(CMAKE_USE_LIBSSH2 OFF CACHE BOOL "")
-set(CMAKE_USE_OPENSSL ON CACHE BOOL "")
-set(HTTP_ONLY ON CACHE BOOL "")
-
-add_subdirectory(external/libcurl)
-
 set(ENABLE_COMMONCRYPTO OFF CACHE BOOL "")
 set(ENABLE_GNUTLS OFF CACHE BOOL "")
 set(ENABLE_MBEDTLS OFF CACHE BOOL "")
@@ -37,7 +29,7 @@ if(WIN32)
 endif()
 
 add_executable(banglauncher ${launcher_srcs})
-target_link_libraries(banglauncher libcurl libzip::zip cjson_static)
+target_link_libraries(banglauncher libzip::zip cjson_static)
 if(WIN32)
-    target_link_libraries(banglauncher shlwapi)
+    target_link_libraries(banglauncher shlwapi wininet)
 endif()

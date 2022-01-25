@@ -1,25 +1,26 @@
 #include <stdio.h>
 
 #include <cjson/cJSON.h>
-#include <curl/curl.h>
 #include <zip.h>
 
-#ifdef _WIN32
 #include "sys_windows.h"
-#endif
+#include <WinInet.h>
 
 #define BUFFER_SIZE 1024
 #define STRING_SIZE 256
 
 #define error_ok                0
-#define error_cant_init_curl    1
+#define error_cant_init_inet    1
 #define error_cant_access_site  2
 #define error_cant_parse_json   3
 #define error_no_release_found  4
 
+#define download_query_size ((size_t) -1)
+
 typedef struct _bang_zip_information {
     char version[STRING_SIZE];
     char zip_url[STRING_SIZE];
+    size_t zip_size;
 } bang_zip_information;
 
 typedef struct _memory {
@@ -27,18 +28,71 @@ typedef struct _memory {
     size_t size;
 } memory;
 
-size_t append_to_memory(char *data, size_t size, size_t nmemb, memory *mem) {
-    size_t realsize = size * nmemb;
-    mem->data = realloc(mem->data, mem->size + realsize);
-    memcpy(mem->data + mem->size, data, realsize);
-    mem->size += realsize;
-    return realsize;
+int download_file(memory *mem, const char *url, size_t download_size) {
+    int errcode = error_ok;
+
+    HINTERNET hInternet = NULL;
+    HINTERNET hConnect = NULL;
+
+    char buffer[BUFFER_SIZE];
+
+    if (!(hInternet = InternetOpen(
+        "Mozilla/5.0",
+        INTERNET_OPEN_TYPE_DIRECT,
+        NULL,
+        NULL,
+        0
+    ))) {
+        errcode = error_cant_init_inet;
+        goto finish;
+    }
+
+    if (!(hConnect = InternetOpenUrlA(hInternet, url, NULL, 0, 0, (DWORD_PTR) NULL))) {
+        errcode = error_cant_access_site;
+        goto finish;
+    }
+
+    while (1) {
+        DWORD bytes_to_read = 0, bytes_read = 0;
+
+        if (download_size == download_query_size) {
+            if (!InternetQueryDataAvailable(hConnect, &bytes_to_read, 0, 0)) {
+                errcode = error_cant_access_site;
+                goto finish;
+            }
+        } else {
+            bytes_to_read = download_size;
+        }
+
+        if (bytes_to_read > BUFFER_SIZE) {
+            bytes_to_read = BUFFER_SIZE;
+        } else if (bytes_to_read == 0) {
+            break;
+        }
+
+        memset(buffer, 0, BUFFER_SIZE);
+        if (!InternetReadFile(hConnect, buffer, bytes_to_read, &bytes_read)) {
+            errcode = error_cant_access_site;
+            goto finish;
+        }
+
+        mem->data = realloc(mem->data, mem->size + bytes_read);
+        memcpy(mem->data + mem->size, buffer, bytes_read);
+        mem->size += bytes_read;
+
+        if (download_size != download_query_size) {
+            download_size -= bytes_read;
+        }
+    }
+
+finish:
+    if (errcode && mem->data) free(mem->data);
+    if (hConnect) InternetCloseHandle(hConnect);
+    if (hInternet) InternetCloseHandle(hInternet);
+    return errcode;
 }
 
-int get_bang_version(cJSON *json, bang_zip_information *out) {
-    if (!cJSON_IsArray(json) || cJSON_GetArraySize(json) == 0) return 1;
-
-    cJSON *latest = cJSON_GetArrayItem(json, 0);
+int get_bang_version(cJSON *latest, bang_zip_information *out) {
     if (!cJSON_IsObject(latest)) return 1;
 
     cJSON *assets = cJSON_GetObjectItemCaseSensitive(latest, "assets");
@@ -55,69 +109,37 @@ int get_bang_version(cJSON *json, bang_zip_information *out) {
 
     strncpy(out->version, cJSON_GetStringValue(json_version), STRING_SIZE);
     strncpy(out->zip_url, cJSON_GetStringValue(json_zip_url), STRING_SIZE);
+
+    cJSON *json_zip_size = cJSON_GetObjectItemCaseSensitive(asset, "size");
+    if (!json_zip_url || !cJSON_IsNumber(json_zip_size)) return 1;
+
+    out->zip_size = (int) cJSON_GetNumberValue(json_zip_size);
     
     return 0;
 }
 
 int get_bang_latest_version(bang_zip_information *out) {
-    int errcode = error_ok;
-
-    CURL *curl = curl_easy_init();
-    if (curl) {
-        curl_easy_setopt(curl, CURLOPT_URL, "https://api.github.com/repos/salvoilmiosi/bang-sdl/releases");
-        curl_easy_setopt(curl, CURLOPT_USERAGENT, "Mozilla/5.0");
-        curl_easy_setopt(curl, CURLOPT_SSL_VERIFYPEER, 0);
-
-        memory mem;
-        memset(&mem, 0, sizeof(mem));
-
-        curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, append_to_memory);
-        curl_easy_setopt(curl, CURLOPT_WRITEDATA, &mem);
-
-        CURLcode res = curl_easy_perform(curl);
-        if (res == CURLE_OK) {
-            cJSON *json = cJSON_ParseWithLength(mem.data, mem.size);
-            if (json) {
-                if (get_bang_version(json, out) == 0) {
-                    errcode = error_ok;
-                } else {
-                    errcode = error_no_release_found;
-                }
-
-                cJSON_Delete(json);
+    memory mem;
+    memset(&mem, 0, sizeof(mem));
+    
+    int errcode = download_file(&mem, "https://api.github.com/repos/salvoilmiosi/bang-sdl/releases/latest", download_query_size);
+    if (errcode == error_ok) {
+        cJSON *json = cJSON_ParseWithLength(mem.data, mem.size);
+        if (json) {
+            if (get_bang_version(json, out) == 0) {
+                errcode = error_ok;
             } else {
-                errcode = error_cant_parse_json;
+                errcode = error_no_release_found;
             }
+
+            cJSON_Delete(json);
         } else {
-            errcode = error_cant_access_site;
+            errcode = error_cant_parse_json;
         }
-
-        if (mem.data) {
-            free(mem.data);
-        }
-
-        curl_easy_cleanup(curl);
-    } else {
-        errcode = error_cant_init_curl;
     }
 
+    if (mem.data) free(mem.data);
     return errcode;
-}
-
-void download_file(const char *url, memory *out) {
-    CURL *curl = curl_easy_init();
-    if (!curl) return;
-
-    curl_easy_setopt(curl, CURLOPT_URL, url);
-    curl_easy_setopt(curl, CURLOPT_USERAGENT, "Mozilla/5.0");
-    curl_easy_setopt(curl, CURLOPT_FOLLOWLOCATION, 1);
-    curl_easy_setopt(curl, CURLOPT_SSL_VERIFYPEER, 0);
-
-    curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, append_to_memory);
-    curl_easy_setopt(curl, CURLOPT_WRITEDATA, out);
-
-    curl_easy_perform(curl);
-    curl_easy_cleanup(curl);
 }
 
 int download_bang_last_version(const char *base_dir) {
@@ -126,7 +148,7 @@ int download_bang_last_version(const char *base_dir) {
 
     int errcode = get_bang_latest_version(&info);
     if (errcode == error_ok) {
-        printf("Ultima versione: %s\n", info.version);
+        printf("Latest version: %s\n", info.version);
 
         if (file_exists(base_dir)) {
             FILE *file = fopen(concat_path(base_dir, "version.txt"), "r");
@@ -136,7 +158,7 @@ int download_bang_last_version(const char *base_dir) {
                     version[strlen(version)-1] = '\0';
                     fclose(file);
                     if (strcmp(info.version, version) == 0) {
-                        printf("Hai l'ultima versione\n");
+                        printf("You have the latest version\n");
                         return error_ok;
                     }
                 }
@@ -145,13 +167,12 @@ int download_bang_last_version(const char *base_dir) {
             make_dir(base_dir);
         }
 
-        printf("Download: %s\n", info.zip_url);
+        printf("Download: %s (%d bytes)\n", info.zip_url, info.zip_size);
 
         memory mem;
         memset(&mem, 0, sizeof(mem));
 
-        download_file(info.zip_url, &mem);
-        printf("%d byte scaricati\n", mem.size);
+        download_file(&mem, info.zip_url, info.zip_size);
         zip_error_t error;
         zip_source_t *source = zip_source_buffer_create(mem.data, mem.size, 1, &error);
         zip_t *archive = zip_open_from_source(source, 0, &error);
@@ -200,8 +221,6 @@ int download_bang_last_version(const char *base_dir) {
 }
 
 int main(int argc, char **argv) {
-    curl_global_init(CURL_GLOBAL_DEFAULT);
-
     const char *base_dir = get_bin_path();
 
     switch (download_bang_last_version(base_dir)) {
@@ -212,21 +231,19 @@ int main(int argc, char **argv) {
             launch_process(concat_path(base_dir, "bangclient.exe"));
         }
         break;
-    case error_cant_init_curl:
-        fprintf(stderr, "Impossibile inizializzare curl\n");
+    case error_cant_init_inet:
+        fprintf(stderr, "Could not init WinInet\n");
         break;
     case error_cant_access_site:
-        fprintf(stderr, "Impossibile accedere al sito\n");
+        fprintf(stderr, "Could not access site\n");
         break;
     case error_cant_parse_json:
-        fprintf(stderr, "Impossibile leggere l'output json\n");
+        fprintf(stderr, "Could not parse json output\n");
         break;
     case error_no_release_found:
-        fprintf(stderr, "Nessuna release trovata\n");
+        fprintf(stderr, "No release found\n");
         break;
     }
 
-    curl_global_cleanup();
-    
     return 0;
 }
