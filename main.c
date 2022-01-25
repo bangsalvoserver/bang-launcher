@@ -16,6 +16,7 @@
 #define error_no_release_found  4
 
 #define download_query_size ((size_t) -1)
+#define download_bar_size 100
 
 typedef struct _bang_zip_information {
     char version[STRING_SIZE];
@@ -28,7 +29,9 @@ typedef struct _memory {
     size_t size;
 } memory;
 
-int download_file(memory *mem, const char *url, size_t download_size) {
+typedef void (*downloading_callback) (int bytes_read, int bytes_total);
+
+int download_file(memory *mem, const char *url, size_t download_size, downloading_callback callback) {
     int errcode = error_ok;
 
     HINTERNET hInternet = NULL;
@@ -52,6 +55,7 @@ int download_file(memory *mem, const char *url, size_t download_size) {
         goto finish;
     }
 
+    size_t remaining_bytes = download_size;
     while (1) {
         DWORD bytes_to_read = 0, bytes_read = 0;
 
@@ -61,7 +65,7 @@ int download_file(memory *mem, const char *url, size_t download_size) {
                 goto finish;
             }
         } else {
-            bytes_to_read = download_size;
+            bytes_to_read = remaining_bytes;
         }
 
         if (bytes_to_read > BUFFER_SIZE) {
@@ -80,8 +84,12 @@ int download_file(memory *mem, const char *url, size_t download_size) {
         memcpy(mem->data + mem->size, buffer, bytes_read);
         mem->size += bytes_read;
 
+        if (callback) {
+            callback(mem->size, download_size);
+        }
+
         if (download_size != download_query_size) {
-            download_size -= bytes_read;
+            remaining_bytes -= bytes_read;
         }
     }
 
@@ -122,7 +130,7 @@ int get_bang_latest_version(bang_zip_information *out) {
     memory mem;
     memset(&mem, 0, sizeof(mem));
     
-    int errcode = download_file(&mem, "https://api.github.com/repos/salvoilmiosi/bang-sdl/releases/latest", download_query_size);
+    int errcode = download_file(&mem, "https://api.github.com/repos/salvoilmiosi/bang-sdl/releases/latest", download_query_size, NULL);
     if (errcode == error_ok) {
         cJSON *json = cJSON_ParseWithLength(mem.data, mem.size);
         if (json) {
@@ -142,6 +150,16 @@ int get_bang_latest_version(bang_zip_information *out) {
     return errcode;
 }
 
+void print_download_status(int bytes_read, int bytes_total) {
+    static int boxes_so_far = 0;
+
+    const int box_bytes = bytes_total / download_bar_size;
+    int nboxes = bytes_read / box_bytes - boxes_so_far;
+    
+    if (nboxes > 0) boxes_so_far = bytes_read / box_bytes;
+    for (; nboxes > 0; --nboxes) printf("*");
+}
+
 int download_bang_last_version(const char *base_dir) {
     bang_zip_information info;
     memset(&info, 0, sizeof(info));
@@ -158,7 +176,6 @@ int download_bang_last_version(const char *base_dir) {
                     version[strlen(version)-1] = '\0';
                     fclose(file);
                     if (strcmp(info.version, version) == 0) {
-                        printf("You have the latest version\n");
                         return error_ok;
                     }
                 }
@@ -172,7 +189,8 @@ int download_bang_last_version(const char *base_dir) {
         memory mem;
         memset(&mem, 0, sizeof(mem));
 
-        download_file(&mem, info.zip_url, info.zip_size);
+        download_file(&mem, info.zip_url, info.zip_size, print_download_status);
+        printf("\n");
         zip_error_t error;
         zip_source_t *source = zip_source_buffer_create(mem.data, mem.size, 1, &error);
         zip_t *archive = zip_open_from_source(source, 0, &error);
