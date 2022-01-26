@@ -9,6 +9,7 @@
 typedef struct _memory {
     char *data;
     size_t size;
+    size_t capacity;
 } memory;
 
 #define BUFFER_SIZE 1024
@@ -48,6 +49,11 @@ static int download_file(memory *mem, const char *url, size_t download_size, dow
         goto finish;
     }
 
+    if (download_size != download_query_size) {
+        mem->capacity = download_size;
+        mem->data = malloc(download_size);
+    }
+
     size_t remaining_bytes = download_size;
     while (1) {
         DWORD bytes_to_read = 0, bytes_read = 0;
@@ -73,7 +79,10 @@ static int download_file(memory *mem, const char *url, size_t download_size, dow
             goto finish;
         }
 
-        mem->data = realloc(mem->data, mem->size + bytes_read);
+        if (mem->size + bytes_read > mem->capacity) {
+            mem->data = realloc(mem->data, mem->size + bytes_read);
+            mem->capacity = mem->size + bytes_read;
+        }
         memcpy(mem->data + mem->size, buffer, bytes_read);
         mem->size += bytes_read;
 

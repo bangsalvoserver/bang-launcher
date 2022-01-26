@@ -75,6 +75,8 @@ int get_bang_latest_version() {
 }
 
 void set_status(const char *format, ...) {
+    static char last_buffer[256] = {0};
+
     va_list arg;
     char buffer[256];
 
@@ -82,14 +84,17 @@ void set_status(const char *format, ...) {
     vsnprintf(buffer, 256, format, arg);
     va_end(arg);
 
-    SendMessage(hWndStatus, SB_SETTEXT, MAKEWPARAM(0, 0), buffer);
+    if (strcmp(last_buffer, buffer)) {
+        SendMessage(hWndStatus, SB_SETTEXT, MAKEWPARAM(0, 0), buffer);
+        strncpy(last_buffer, buffer, 256);
+    }
 }
 
 void print_download_status(int bytes_read, int bytes_total) {
-    SendMessage(hWndProgressBar, PBM_SETRANGE, 0, MAKELPARAM(0, 0xff));
-    SendMessage(hWndProgressBar, PBM_SETPOS, (float) bytes_read / bytes_total * 0xff, 0);
+    SendMessage(hWndProgressBar, PBM_SETPOS, (float) bytes_read / bytes_total * 0xffff, 0);
 
-    set_status("Download: %s ... %d %%", bang_zip_information.version, (int)((float) bytes_read / bytes_total * 100));
+    int percent = ((float) bytes_read / bytes_total * 100);
+    set_status("Download: %s ... %d %%", bang_zip_information.version, percent);
 }
 
 DWORD download_bang_latest_version(void *param) {
@@ -176,6 +181,8 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT Msg, WPARAM wParam, LPARAM lParam) {
             NULL);
 
         hDownload = CreateThread(NULL, 0, download_bang_latest_version, NULL, 0, NULL);
+            
+        SendMessage(hWndProgressBar, PBM_SETRANGE, 0, MAKELPARAM(0, 0xffff));
         break;
     }
     case WM_INSTALL_FINISHED:

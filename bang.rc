@@ -1,3 +1,5 @@
 #include "resources.h"
 
-IDI_ICON ICON bang.ico
+IDI_ICON ICON "bang.ico"
+
+1 24 "manifest.xml"
