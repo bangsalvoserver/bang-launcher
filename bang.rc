@@ -3,3 +3,18 @@
 IDI_ICON ICON "bang.ico"
 
 1 24 "manifest.xml"
+
+1 VERSIONINFO
+BEGIN
+    BLOCK "StringFileInfo"
+    BEGIN
+        BLOCK "040904E4"
+        BEGIN
+            VALUE "CompanyName",        "salvoilmiosi\0"
+            VALUE "FileVersion",        "3.0\0"
+            VALUE "LegalCopyright",     "All rights are reserved by dvGiochi\0"
+            VALUE "OriginalFilename",   "banglauncher.exe\0"
+            VALUE "ProductName",        "Bang! Launcher\0"
+        END
+    END
+END
