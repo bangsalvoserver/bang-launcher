@@ -24,6 +24,28 @@ struct {
     size_t zip_size;
 } bang_zip_information;
 
+typedef long (__stdcall *entrypoint_fun_t)(const char*);
+
+void launch_client() {
+    HINSTANCE hinstLib;
+    entrypoint_fun_t entrypoint;
+
+    SetDllDirectory(bang_base_dir);
+    hinstLib = LoadLibrary("libbangclient.dll");
+
+    if (hinstLib != NULL) {
+        entrypoint = (entrypoint_fun_t) GetProcAddress(hinstLib, "entrypoint");
+
+        if (entrypoint != NULL) {
+            (entrypoint) (bang_base_dir);
+        }
+
+        FreeLibrary(hinstLib);
+    } else {
+        launch_process(concat_path(bang_base_dir, "bangclient.exe"));
+    }
+}
+
 int get_bang_version(cJSON *latest) {
     if (!cJSON_IsObject(latest)) return 1;
 
@@ -186,7 +208,8 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT Msg, WPARAM wParam, LPARAM lParam) {
         break;
     }
     case WM_INSTALL_FINISHED:
-        launch_process(concat_path(bang_base_dir, "bangclient.exe"));
+        DestroyWindow(hWndMain);
+        launch_client();
         // fall through
     case WM_DESTROY:
         PostQuitMessage(0);
@@ -267,15 +290,23 @@ INT WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine
     }
 
     if (must_download_latest_version()) {
+        RECT desktop_rect;
+        GetClientRect(GetDesktopWindow(), &desktop_rect);
+
+        const int window_width = 400;
+        const int window_height = 100;
+        const int window_left = desktop_rect.left + (desktop_rect.right - desktop_rect.left - window_width) / 2;
+        const int window_top = desktop_rect.top + (desktop_rect.bottom - desktop_rect.top - window_height) / 2;
+
         hWndMain = CreateWindowEx(
             WS_EX_CLIENTEDGE,
             ClassName,
             "Bang! Launcher",
             WS_CAPTION | WS_SYSMENU | WS_MINIMIZEBOX,
-            CW_USEDEFAULT,
-            CW_USEDEFAULT,
-            400,
-            100,
+            window_left,
+            window_top,
+            window_width,
+            window_height,
             NULL,
             NULL,
             hInstance,
@@ -297,7 +328,7 @@ INT WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine
 
         return Msg.wParam;
     } else {
-        launch_process(concat_path(bang_base_dir, "bangclient.exe"));
+        launch_client();
         return 0;
     }
 }
