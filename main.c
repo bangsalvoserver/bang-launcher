@@ -135,14 +135,11 @@ DWORD download_bang_latest_version(void *param) {
         const char *path_basename = strchr(zip_get_name(archive, i, 0), '/') + 1;
         if (path_basename) {
             const char *path = concat_path(bang_base_dir, path_basename);
-            size_t file_size = get_file_size(path);
 
             zip_stat_t stat;
             if (zip_stat_index(archive, i, ZIP_STAT_SIZE, &stat) != 0) continue;
 
             zip_int64_t zip_file_size = stat.size;
-
-            if (file_size == zip_file_size) continue;
 
             FILE *file_out = fopen(path, "wb");
             if (!file_out) continue;

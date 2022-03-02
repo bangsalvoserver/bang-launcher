@@ -29,3 +29,6 @@ endif()
 
 add_executable(banglauncher WIN32 main.c bang.rc)
 target_link_libraries(banglauncher libzip::zip cjson_static shlwapi wininet comctl32)
+if (CMAKE_BUILD_TYPE STREQUAL "Debug")
+    target_link_options(banglauncher PRIVATE -mconsole)
+endif()
