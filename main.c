@@ -20,6 +20,7 @@ const char *bang_base_dir;
 
 struct {
     char version[STRING_SIZE];
+    char commit[STRING_SIZE];
     char zip_url[STRING_SIZE];
     size_t zip_size;
 } bang_zip_information;
@@ -55,6 +56,9 @@ int get_bang_version(cJSON *latest) {
     cJSON *json_version = cJSON_GetObjectItemCaseSensitive(latest, "name");
     if (!json_version || !cJSON_IsString(json_version)) return 1;
 
+    cJSON *json_commit = cJSON_GetObjectItemCaseSensitive(latest, "target_commitish");
+    if (!json_commit || !cJSON_IsString(json_version)) return 1;
+
     cJSON *asset = cJSON_GetArrayItem(assets, 0);
     if (!asset || !cJSON_IsObject(asset)) return 1;
 
@@ -63,6 +67,7 @@ int get_bang_version(cJSON *latest) {
 
     strncpy(bang_zip_information.version, cJSON_GetStringValue(json_version), STRING_SIZE);
     strncpy(bang_zip_information.zip_url, cJSON_GetStringValue(json_zip_url), STRING_SIZE);
+    strncpy(bang_zip_information.commit, cJSON_GetStringValue(json_commit), STRING_SIZE);
 
     cJSON *json_zip_size = cJSON_GetObjectItemCaseSensitive(asset, "size");
     if (!json_zip_url || !cJSON_IsNumber(json_zip_size)) return 1;
@@ -164,7 +169,7 @@ DWORD download_bang_latest_version(void *param) {
     zip_close(archive);
 
     FILE *version_file = fopen(concat_path(bang_base_dir, "version.txt"), "w");
-    fprintf(version_file, "%s\n", bang_zip_information.version);
+    fprintf(version_file, "%s\n", bang_zip_information.commit);
     fclose(version_file);
 
     SendMessage(hWndMain, WM_INSTALL_FINISHED, 0, 0);
@@ -245,7 +250,7 @@ BOOL must_download_latest_version() {
             if (fgets(version, STRING_SIZE, file)) {
                 version[strlen(version)-1] = '\0';
                 fclose(file);
-                if (strcmp(bang_zip_information.version, version) == 0) {
+                if (strcmp(bang_zip_information.commit, version) == 0) {
                     return FALSE;
                 }
             }
