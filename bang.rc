@@ -1,20 +1,42 @@
+#include <winver.h>
+#include <ntdef.h>
+
 #include "resources.h"
 
 IDI_ICON ICON "bang.ico"
 
 1 24 "manifest.xml"
 
-1 VERSIONINFO
-BEGIN
+VS_VERSION_INFO VERSIONINFO
+FILEVERSION         1,0,0,0
+PRODUCTVERSION      1,0,0,0
+FILEFLAGSMASK       VS_FFI_FILEFLAGSMASK
+#ifdef DEBUG
+FILEFLAGS           VS_FF_DEBUG
+#else
+FILEFLAGS           0x0L
+#endif
+FILEOS              VOS_NT
+FILETYPE            VFT_APP
+FILESUBTYPE         0x0L
+{
     BLOCK "StringFileInfo"
-    BEGIN
-        BLOCK "040904E4"
-        BEGIN
-            VALUE "CompanyName",        "salvoilmiosi\0"
-            VALUE "FileVersion",        "3.0\0"
-            VALUE "LegalCopyright",     "All rights are reserved by dvGiochi\0"
-            VALUE "OriginalFilename",   "banglauncher.exe\0"
-            VALUE "ProductName",        "Bang! Launcher\0"
-        END
-    END
-END
+    { 
+        BLOCK "040904b0"
+        {
+            VALUE "Comments",         "\0"
+            VALUE "CompanyName",      "salvoilmiosi\0"
+            VALUE "FileDescription",  "Bang! Launcher\0"
+            VALUE "FileVersion",      "1.0.0.0\0"
+            VALUE "InternalName",     "banglauncher\0"
+            VALUE "LegalCopyright",   "(C) GNU General Public License\0"
+            VALUE "OriginalFilename", "banglauncher.exe\0"
+            VALUE "ProductName",      "Bang! Launcher\0"
+            VALUE "ProductVersion",   "1.0.0.0\0"
+        } 
+    }
+    BLOCK "VarFileInfo"
+    {
+        VALUE "Translation", 0x409, 1200
+    }
+}
