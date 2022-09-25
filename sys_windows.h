@@ -23,9 +23,11 @@ typedef struct _memory {
 
 #define download_query_size ((size_t) -1)
 
-typedef void (*downloading_callback) (int bytes_read, int bytes_total);
+typedef void (*downloading_callback) (int bytes_read, int bytes_total, void *params);
 
-static int download_file(memory *mem, const char *url, size_t download_size, downloading_callback callback) {
+static int download_file(memory *mem, const char *url, size_t download_size, downloading_callback callback, void *params) {
+    memset(mem, 0, sizeof(memory));
+
     int errcode = error_ok;
 
     HINTERNET hInternet = NULL;
@@ -87,7 +89,7 @@ static int download_file(memory *mem, const char *url, size_t download_size, dow
         mem->size += bytes_read;
 
         if (callback) {
-            callback(mem->size, download_size);
+            callback(mem->size, download_size, params);
         }
 
         if (download_size != download_query_size) {
@@ -151,6 +153,11 @@ static void make_dir(const char *filename) {
 
 static int file_exists(const char *filename) {
     return PathFileExistsA(filename);
+}
+
+static BOOL is_directory(const char *filename) {
+    DWORD attr = GetFileAttributesA(filename);
+    return (attr != INVALID_FILE_ATTRIBUTES && (attr & FILE_ATTRIBUTE_DIRECTORY));
 }
 
 static int get_file_size(const char *filename) {

@@ -1,4 +1,5 @@
 #include <stdio.h>
+#include <assert.h>
 
 #include <cjson/cJSON.h>
 #include <zip.h>
@@ -7,6 +8,7 @@
 #include "resources.h"
 
 #define WM_INSTALL_FINISHED WM_USER + 1
+#define WM_INSTALL_FAILED   WM_USER + 2
 
 const char ClassName[] = "MainWindowClass";
 
@@ -19,85 +21,210 @@ HANDLE hDownload;
 const char *bang_base_dir;
 
 struct {
+
     char version[STRING_SIZE];
+
     char commit[STRING_SIZE];
     char zip_url[STRING_SIZE];
     size_t zip_size;
+
+    char cards_commit[STRING_SIZE];
+    char cards_pak_url[STRING_SIZE];
+    size_t cards_pak_size;
+
 } bang_zip_information;
 
 typedef long (__stdcall *entrypoint_fun_t)(const char*);
+typedef const char * (__stdcall *client_version_fun_t)(void);
 
-void launch_client() {
-    HINSTANCE hinstLib;
-    entrypoint_fun_t entrypoint;
-
-    SetDllDirectory(bang_base_dir);
-    hinstLib = LoadLibrary("libbangclient.dll");
-
-    if (hinstLib != NULL) {
-        entrypoint = (entrypoint_fun_t) GetProcAddress(hinstLib, "entrypoint");
-
-        if (entrypoint != NULL) {
-            (entrypoint) (bang_base_dir);
-        }
-
-        FreeLibrary(hinstLib);
-    } else {
-        launch_process(concat_path(bang_base_dir, "bangclient.exe"));
+HINSTANCE load_bangclient_dll() {
+    if (!file_exists(bang_base_dir)) {
+        return FALSE;
     }
+    SetDllDirectory(bang_base_dir);
+    return LoadLibrary("libbangclient.dll");
 }
 
-int get_bang_version(cJSON *latest) {
-    if (!cJSON_IsObject(latest)) return 1;
+BOOL must_download_latest_version() {
+    BOOL ret = TRUE;
+    HINSTANCE lib = load_bangclient_dll();
+    if (lib != NULL) {
+        client_version_fun_t fun = (client_version_fun_t) GetProcAddress(lib, "get_client_commit_hash");
+        if (fun) {
+            const char *version = (*fun)();
+            if (strcmp(bang_zip_information.commit, version) == 0) {
+                ret = FALSE;
+            }
+        }
+        FreeLibrary(lib);
+    }
+    return ret;
+}
+
+BOOL must_download_cards_pak() {
+    BOOL ret = TRUE;
+    if (bang_zip_information.cards_pak_size == 0) {
+        ret = FALSE;
+    } else {
+        HINSTANCE lib = load_bangclient_dll();
+        if (lib != NULL) {
+            client_version_fun_t fun = (client_version_fun_t) GetProcAddress(lib, "get_cards_commit_hash");
+            if (fun) {
+                const char *version = (*fun)();
+                if (strcmp(bang_zip_information.cards_commit, version) == 0) {
+                    ret = FALSE;
+                }
+            }
+            FreeLibrary(lib);
+        }
+    }
+    return ret;
+}
+
+int launch_client() {
+    int ret = 1;
+    HINSTANCE lib = load_bangclient_dll();
+    if (lib != NULL) {
+        entrypoint_fun_t fun = (entrypoint_fun_t) GetProcAddress(lib, "entrypoint");
+        if (fun) {
+            (*fun)(bang_base_dir);
+            ret = 0;
+        }
+        FreeLibrary(lib);
+    }
+    return ret;
+}
+
+void get_bang_version(cJSON *latest) {
+    assert(cJSON_IsObject(latest));
 
     cJSON *assets = cJSON_GetObjectItemCaseSensitive(latest, "assets");
-    if (!assets || !cJSON_IsArray(assets) || cJSON_GetArraySize(assets) == 0) return 1;
+    assert(assets && cJSON_IsArray(assets) && cJSON_GetArraySize(assets) > 0);
 
     cJSON *json_version = cJSON_GetObjectItemCaseSensitive(latest, "name");
-    if (!json_version || !cJSON_IsString(json_version)) return 1;
+    assert(json_version && cJSON_IsString(json_version));
 
     cJSON *json_commit = cJSON_GetObjectItemCaseSensitive(latest, "target_commitish");
-    if (!json_commit || !cJSON_IsString(json_version)) return 1;
+    assert(json_commit && cJSON_IsString(json_version));
 
     cJSON *asset = cJSON_GetArrayItem(assets, 0);
-    if (!asset || !cJSON_IsObject(asset)) return 1;
+    assert(asset && cJSON_IsObject(asset));
 
     cJSON *json_zip_url = cJSON_GetObjectItemCaseSensitive(asset, "browser_download_url");
-    if (!json_zip_url || !cJSON_IsString(json_zip_url)) return 1;
-
+    assert(json_zip_url && cJSON_IsString(json_zip_url));
+    
     strncpy(bang_zip_information.version, cJSON_GetStringValue(json_version), STRING_SIZE);
     strncpy(bang_zip_information.zip_url, cJSON_GetStringValue(json_zip_url), STRING_SIZE);
     strncpy(bang_zip_information.commit, cJSON_GetStringValue(json_commit), STRING_SIZE);
 
     cJSON *json_zip_size = cJSON_GetObjectItemCaseSensitive(asset, "size");
-    if (!json_zip_url || !cJSON_IsNumber(json_zip_size)) return 1;
+    assert(json_zip_size && cJSON_IsNumber(json_zip_size));
 
     bang_zip_information.zip_size = (int) cJSON_GetNumberValue(json_zip_size);
-    
-    return 0;
+
+    if (cJSON_GetArraySize(assets) > 1) {
+        cJSON *cards_asset = cJSON_GetArrayItem(assets, 1);
+        assert(cards_asset && cJSON_IsObject(cards_asset));
+        
+        cJSON *json_cards_pak_url = cJSON_GetObjectItemCaseSensitive(cards_asset, "browser_download_url");
+        assert(json_cards_pak_url && cJSON_IsString(json_zip_url));
+
+        strncpy(bang_zip_information.cards_pak_url, cJSON_GetStringValue(json_cards_pak_url), STRING_SIZE);
+
+        cJSON *cards_json_zip_size = cJSON_GetObjectItemCaseSensitive(cards_asset, "size");
+        assert(cards_json_zip_size && cJSON_IsNumber(cards_json_zip_size));
+
+        bang_zip_information.cards_pak_size = (int) cJSON_GetNumberValue(cards_json_zip_size);
+    }
 }
 
-int get_bang_latest_version() {
+cJSON *find_item_in_tree(cJSON *json, const char *path) {
+    assert(cJSON_IsObject(json));
+
+    cJSON *json_tree = cJSON_GetObjectItemCaseSensitive(json, "tree");
+    assert(json_tree && cJSON_IsArray(json_tree));
+
+    int json_tree_size = cJSON_GetArraySize(json_tree);
+    for (int i=0; i<json_tree_size; ++i) {
+        cJSON *json_tree_item = cJSON_GetArrayItem(json_tree, i);
+        assert(json_tree_item && cJSON_IsObject(json_tree_item));
+
+        cJSON *json_path = cJSON_GetObjectItemCaseSensitive(json_tree_item, "path");
+        assert(json_path && cJSON_IsString(json_path));
+
+        if (strcmp(cJSON_GetStringValue(json_path), path) == 0) {
+            return json_tree_item;
+        }
+    }
+    return NULL;
+}
+
+int get_cards_latest_version() {
     memory mem;
-    memset(&mem, 0, sizeof(mem));
-    
-    int errcode = download_file(&mem, "https://api.github.com/repos/salvoilmiosi/bang-sdl/releases/latest", download_query_size, NULL);
+    int errcode;
+    char buffer[STRING_SIZE];
+
+    snprintf(buffer, STRING_SIZE, "https://api.github.com/repos/salvoilmiosi/bang-sdl/git/trees/%s", bang_zip_information.commit);
+    errcode = download_file(&mem, buffer, download_query_size, NULL, NULL);
     if (errcode == error_ok) {
         cJSON *json = cJSON_ParseWithLength(mem.data, mem.size);
+        free(mem.data);
+
         if (json) {
-            if (get_bang_version(json) == 0) {
-                errcode = error_ok;
+            cJSON *json_resources = find_item_in_tree(json, "resources");
+            if (json_resources) {
+                cJSON *json_url = cJSON_GetObjectItemCaseSensitive(json_resources, "url");
+                assert(json_url && cJSON_IsString(json_url));
+
+                strncpy(buffer, cJSON_GetStringValue(json_url), STRING_SIZE);
+                cJSON_Delete(json);
+
+                errcode = download_file(&mem, buffer, download_query_size, NULL, NULL);
+                if (errcode == error_ok) {
+                    json = cJSON_ParseWithLength(mem.data, mem.size);
+                    free(mem.data);
+
+                    cJSON *json_cards = find_item_in_tree(json, "cards");
+                    if (json_cards) {
+                        cJSON *json_cards_sha = cJSON_GetObjectItemCaseSensitive(json_cards, "sha");
+                        assert(json_cards_sha && cJSON_IsString(json_cards_sha));
+
+                        strncpy(bang_zip_information.cards_commit, cJSON_GetStringValue(json_cards_sha), STRING_SIZE);
+                    } else {
+                        errcode = error_no_release_found;
+                    }
+                    cJSON_Delete(json);
+                }
             } else {
                 errcode = error_no_release_found;
+                cJSON_Delete(json);
             }
-
-            cJSON_Delete(json);
         } else {
             errcode = error_cant_parse_json;
         }
     }
 
-    if (mem.data) free(mem.data);
+    return errcode;
+}
+
+int get_bang_latest_version() {
+    memory mem;
+    
+    int errcode = download_file(&mem, "https://api.github.com/repos/salvoilmiosi/bang-sdl/releases/latest", download_query_size, NULL, NULL);
+    if (errcode == error_ok) {
+        cJSON *json = cJSON_ParseWithLength(mem.data, mem.size);
+        free(mem.data);
+
+        if (json) {
+            get_bang_version(json);
+            cJSON_Delete(json);
+        } else {
+            errcode = error_cant_parse_json;
+        }
+
+        errcode = get_cards_latest_version();
+    }
+
     return errcode;
 }
 
@@ -117,23 +244,22 @@ void set_status(const char *format, ...) {
     }
 }
 
-void print_download_status(int bytes_read, int bytes_total) {
+void print_download_status(int bytes_read, int bytes_total, void *params) {
     SendMessage(hWndProgressBar, PBM_SETPOS, (float) bytes_read / bytes_total * 0xffff, 0);
 
     int percent = ((float) bytes_read / bytes_total * 100);
-    set_status("Download: %s ... %d %%", bang_zip_information.version, percent);
+    set_status("Download: %s ... %d %%", params, percent);
 }
 
-DWORD download_bang_latest_version(void *param) {
-    set_status("Download: %s...", bang_zip_information.version);
-
-    memory mem;
-    memset(&mem, 0, sizeof(mem));
-
-    download_file(&mem, bang_zip_information.zip_url, bang_zip_information.zip_size, print_download_status);
+int unzip_bang_zip(memory *mem) {
+    int result = 0;
     zip_error_t error;
-    zip_source_t *source = zip_source_buffer_create(mem.data, mem.size, 1, &error);
+    zip_source_t *source = zip_source_buffer_create(mem->data, mem->size, 1, &error);
     zip_t *archive = zip_open_from_source(source, 0, &error);
+
+    if (!file_exists(bang_base_dir)) {
+        make_dir(bang_base_dir);
+    }
 
     zip_int64_t num_entries = zip_get_num_entries(archive, 0);
     for (zip_int64_t i=0; i<num_entries; ++i) {
@@ -146,8 +272,13 @@ DWORD download_bang_latest_version(void *param) {
 
             zip_int64_t zip_file_size = stat.size;
 
+            if (is_directory(path)) continue;
+
             FILE *file_out = fopen(path, "wb");
-            if (!file_out) continue;
+            if (!file_out) {
+                result = 1;
+                break;
+            }
 
             zip_file_t *file_in = zip_fopen_index(archive, i, 0);
             if (file_in) {
@@ -167,12 +298,46 @@ DWORD download_bang_latest_version(void *param) {
     }
 
     zip_close(archive);
+    return result;
+}
 
-    FILE *version_file = fopen(concat_path(bang_base_dir, "version.txt"), "w");
-    fprintf(version_file, "%s\n", bang_zip_information.commit);
-    fclose(version_file);
+DWORD download_bang_latest_version(void *param) {
+    set_status("Download: %s...", bang_zip_information.version);
+    
+    int result = WM_INSTALL_FINISHED;
 
-    SendMessage(hWndMain, WM_INSTALL_FINISHED, 0, 0);
+    memory mem;
+
+    download_file(&mem, bang_zip_information.zip_url, bang_zip_information.zip_size, print_download_status, bang_zip_information.version);
+    if (unzip_bang_zip(&mem) == 0) {
+        const char *cards_pak_path = concat_path(bang_base_dir, "cards.pak");
+        if (!file_exists(cards_pak_path) || must_download_cards_pak()) {
+            download_file(&mem, bang_zip_information.cards_pak_url, bang_zip_information.cards_pak_size, print_download_status, "cards.pak");
+
+            FILE *file_out = fopen(cards_pak_path, "wb");
+            if (!file_out) {
+                result = WM_INSTALL_FAILED;
+            } else {
+                set_status("Install: cards.pak");
+
+                char *read_pos = mem.data;
+                int remaining_bytes = mem.size;
+                while (remaining_bytes != 0) {
+                    int nbytes = min(BUFFER_SIZE, remaining_bytes);
+                    fwrite(read_pos, nbytes, 1, file_out);
+
+                    read_pos += nbytes;
+                    remaining_bytes -= nbytes;
+                }
+                fclose(file_out);
+            }
+            free(mem.data);
+        }
+    } else {
+        result = WM_INSTALL_FAILED;
+    }
+
+    SendMessage(hWndMain, result, 0, 0);
     return 0;
 }
 
@@ -209,10 +374,16 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT Msg, WPARAM wParam, LPARAM lParam) {
         SendMessage(hWndProgressBar, PBM_SETRANGE, 0, MAKELPARAM(0, 0xffff));
         break;
     }
+    case WM_INSTALL_FAILED:
+        message_box("Installation failed!", MB_ICONERROR);
+        DestroyWindow(hWndMain);
+        PostQuitMessage(0);
+        break;
     case WM_INSTALL_FINISHED:
         DestroyWindow(hWndMain);
         launch_client();
-        // fall through
+        PostQuitMessage(0);
+        break;
     case WM_DESTROY:
         PostQuitMessage(0);
         break;
@@ -240,25 +411,6 @@ void show_error_message(int errcode) {
         message_box("No release found", MB_ICONERROR);
         break;
     }
-}
-
-BOOL must_download_latest_version() {
-    if (file_exists(bang_base_dir)) {
-        FILE *file = fopen(concat_path(bang_base_dir, "version.txt"), "r");
-        if (file) {
-            char version[STRING_SIZE];
-            if (fgets(version, STRING_SIZE, file)) {
-                version[strlen(version)-1] = '\0';
-                fclose(file);
-                if (strcmp(bang_zip_information.commit, version) == 0) {
-                    return FALSE;
-                }
-            }
-        }
-    } else {
-        make_dir(bang_base_dir);
-    }
-    return TRUE;
 }
 
 INT WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine, INT nCmdShow) {
