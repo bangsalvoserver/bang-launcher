@@ -308,33 +308,39 @@ DWORD download_bang_latest_version(void *param) {
 
     memory mem;
 
-    download_file(&mem, bang_zip_information.zip_url, bang_zip_information.zip_size, print_download_status, bang_zip_information.version);
-    if (unzip_bang_zip(&mem) == 0) {
-        const char *cards_pak_path = concat_path(bang_base_dir, "cards.pak");
-        if (!file_exists(cards_pak_path) || must_download_cards_pak()) {
-            download_file(&mem, bang_zip_information.cards_pak_url, bang_zip_information.cards_pak_size, print_download_status, "cards.pak");
-
-            FILE *file_out = fopen(cards_pak_path, "wb");
-            if (!file_out) {
-                result = WM_INSTALL_FAILED;
-            } else {
-                set_status("Install: cards.pak");
-
-                char *read_pos = mem.data;
-                int remaining_bytes = mem.size;
-                while (remaining_bytes != 0) {
-                    int nbytes = min(BUFFER_SIZE, remaining_bytes);
-                    fwrite(read_pos, nbytes, 1, file_out);
-
-                    read_pos += nbytes;
-                    remaining_bytes -= nbytes;
-                }
-                fclose(file_out);
-            }
-            free(mem.data);
+    const char *cards_pak_path = concat_path(bang_base_dir, "cards.pak");
+    if (!file_exists(cards_pak_path) || must_download_cards_pak()) {
+        if (!file_exists(bang_base_dir)) {
+            make_dir(bang_base_dir);
         }
-    } else {
-        result = WM_INSTALL_FAILED;
+        
+        download_file(&mem, bang_zip_information.cards_pak_url, bang_zip_information.cards_pak_size, print_download_status, "cards.pak");
+
+        FILE *file_out = fopen(cards_pak_path, "wb");
+        if (!file_out) {
+            result = WM_INSTALL_FAILED;
+        } else {
+            set_status("Install: cards.pak");
+
+            char *read_pos = mem.data;
+            int remaining_bytes = mem.size;
+            while (remaining_bytes != 0) {
+                int nbytes = min(BUFFER_SIZE, remaining_bytes);
+                fwrite(read_pos, nbytes, 1, file_out);
+
+                read_pos += nbytes;
+                remaining_bytes -= nbytes;
+            }
+            fclose(file_out);
+        }
+        free(mem.data);
+    }
+
+    if (result == WM_INSTALL_FINISHED) {
+        download_file(&mem, bang_zip_information.zip_url, bang_zip_information.zip_size, print_download_status, bang_zip_information.version);
+        if (unzip_bang_zip(&mem) != 0) {
+            result = WM_INSTALL_FAILED;
+        }
     }
 
     SendMessage(hWndMain, result, 0, 0);
