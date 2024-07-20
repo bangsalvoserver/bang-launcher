@@ -45,22 +45,6 @@ HINSTANCE load_bangclient_dll() {
     return LoadLibrary("libbangclient.dll");
 }
 
-BOOL must_download_latest_version() {
-    BOOL ret = TRUE;
-    HINSTANCE lib = load_bangclient_dll();
-    if (lib != NULL) {
-        client_version_fun_t fun = (client_version_fun_t) GetProcAddress(lib, "get_client_commit_hash");
-        if (fun) {
-            const char *version = (*fun)();
-            if (strcmp(bang_zip_information.commit, version) == 0) {
-                ret = FALSE;
-            }
-        }
-        FreeLibrary(lib);
-    }
-    return ret;
-}
-
 BOOL must_download_cards_pak() {
     BOOL ret = TRUE;
     if (bang_zip_information.cards_pak_size == 0) {
@@ -228,6 +212,27 @@ int get_bang_latest_version() {
     return errcode;
 }
 
+int must_download_latest_version(int *result) {
+    int errcode = get_bang_latest_version();
+    *result = TRUE;
+    HINSTANCE lib = load_bangclient_dll();
+    if (lib != NULL) {
+        client_version_fun_t fun = (client_version_fun_t) GetProcAddress(lib, "get_client_commit_hash");
+        if (fun) {
+            const char *version = (*fun)();
+            if (errcode == error_cant_access_site) {
+                printf("Starting latest installed version\n");
+                errcode = error_ok;
+                *result = FALSE;
+            } else if (errcode == error_ok && strcmp(bang_zip_information.commit, version) == 0) {
+                *result = FALSE;
+            }
+        }
+        FreeLibrary(lib);
+    }
+    return errcode;
+}
+
 void set_status(const char *format, ...) {
     static char last_buffer[256] = {0};
 
@@ -239,7 +244,7 @@ void set_status(const char *format, ...) {
     va_end(arg);
 
     if (strcmp(last_buffer, buffer)) {
-        SendMessage(hWndStatus, SB_SETTEXT, MAKEWPARAM(0, 0), buffer);
+        SendMessage(hWndStatus, SB_SETTEXT, MAKEWPARAM(0, 0), (LPARAM) buffer);
         strncpy(last_buffer, buffer, 256);
     }
 }
@@ -408,7 +413,7 @@ void show_error_message(int errcode) {
         message_box("Could not init WinInet", MB_ICONERROR);
         break;
     case error_cant_access_site:
-        message_box("Could not access site", MB_ICONERROR);
+        message_box("Could not determine latest version", MB_ICONERROR);
         break;
     case error_cant_parse_json:
         message_box("Could not parse json output", MB_ICONERROR);
@@ -443,52 +448,53 @@ INT WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine
     memset(&bang_zip_information, 0, sizeof(bang_zip_information));
 
     bang_base_dir = get_bang_bin_path();
-    int errcode = get_bang_latest_version();
+
+    int result = FALSE;
+    int errcode = must_download_latest_version(&result);
     if (errcode != error_ok) {
         show_error_message(errcode);
         return 0;
     }
-
-    if (must_download_latest_version()) {
-        RECT desktop_rect;
-        GetClientRect(GetDesktopWindow(), &desktop_rect);
-
-        const int window_width = 400;
-        const int window_height = 100;
-        const int window_left = desktop_rect.left + (desktop_rect.right - desktop_rect.left - window_width) / 2;
-        const int window_top = desktop_rect.top + (desktop_rect.bottom - desktop_rect.top - window_height) / 2;
-
-        hWndMain = CreateWindowEx(
-            WS_EX_CLIENTEDGE,
-            ClassName,
-            "Bang! Launcher",
-            WS_CAPTION | WS_SYSMENU | WS_MINIMIZEBOX,
-            window_left,
-            window_top,
-            window_width,
-            window_height,
-            NULL,
-            NULL,
-            hInstance,
-            NULL);
-
-        if (!hWndMain) {
-            MessageBox(NULL, "Window Creation Failed.", "Error", MB_OK | MB_ICONERROR);
-            return 0;
-        }
-
-        ShowWindow(hWndMain, SW_SHOW);
-        UpdateWindow(hWndMain);
-
-        MSG Msg;
-        while (GetMessage(&Msg, NULL, 0, 0)) {
-            TranslateMessage(&Msg);
-            DispatchMessage(&Msg);
-        }
-
-        return Msg.wParam;
-    } else {
+    if (!result) {
         launch_client();
         return 0;
     }
+
+    RECT desktop_rect;
+    GetClientRect(GetDesktopWindow(), &desktop_rect);
+
+    const int window_width = 400;
+    const int window_height = 100;
+    const int window_left = desktop_rect.left + (desktop_rect.right - desktop_rect.left - window_width) / 2;
+    const int window_top = desktop_rect.top + (desktop_rect.bottom - desktop_rect.top - window_height) / 2;
+
+    hWndMain = CreateWindowEx(
+        WS_EX_CLIENTEDGE,
+        ClassName,
+        "Bang! Launcher",
+        WS_CAPTION | WS_SYSMENU | WS_MINIMIZEBOX,
+        window_left,
+        window_top,
+        window_width,
+        window_height,
+        NULL,
+        NULL,
+        hInstance,
+        NULL);
+
+    if (!hWndMain) {
+        MessageBox(NULL, "Window Creation Failed.", "Error", MB_OK | MB_ICONERROR);
+        return 0;
+    }
+
+    ShowWindow(hWndMain, SW_SHOW);
+    UpdateWindow(hWndMain);
+
+    MSG Msg;
+    while (GetMessage(&Msg, NULL, 0, 0)) {
+        TranslateMessage(&Msg);
+        DispatchMessage(&Msg);
+    }
+
+    return Msg.wParam;
 }

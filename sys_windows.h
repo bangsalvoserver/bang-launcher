@@ -34,6 +34,8 @@ static int download_file(memory *mem, const char *url, size_t download_size, dow
     HINTERNET hConnect = NULL;
 
     char buffer[BUFFER_SIZE];
+    DWORD bytes_to_read = BUFFER_SIZE;
+    DWORD bytes_read = 0;
 
     if (!(hInternet = InternetOpen(
         "Mozilla/5.0",
@@ -51,6 +53,15 @@ static int download_file(memory *mem, const char *url, size_t download_size, dow
         goto finish;
     }
 
+    if (!HttpQueryInfo(hConnect, HTTP_QUERY_STATUS_CODE, &buffer, &bytes_to_read, 0)) {
+        errcode = error_cant_access_site;
+        goto finish;
+    }
+    if (strcmp(buffer, "200") != 0) {
+        errcode = error_cant_access_site;
+        goto finish;
+    }
+
     if (download_size != download_query_size) {
         mem->capacity = download_size;
         mem->data = malloc(download_size);
@@ -58,7 +69,8 @@ static int download_file(memory *mem, const char *url, size_t download_size, dow
 
     size_t remaining_bytes = download_size;
     while (1) {
-        DWORD bytes_to_read = 0, bytes_read = 0;
+        bytes_to_read = 0;
+        bytes_read = 0;
 
         if (download_size == download_query_size) {
             if (!InternetQueryDataAvailable(hConnect, &bytes_to_read, 0, 0)) {
