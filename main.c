@@ -10,7 +10,8 @@
 #ifndef BANG_SDL_REPO_NAME
 #error "Must specify BANG_SDL_REPO_NAME"
 #else
-#define GITHUB_RELEASES_ENDPOINT "https://api.github.com/repos/" BANG_SDL_REPO_NAME "/git/trees/%s"
+#define GITHUB_RELEASE_ENDPOINT "https://api.github.com/repos/" BANG_SDL_REPO_NAME "/releases/latest"
+#define GITHUB_COMMIT_ENDPOINT "https://api.github.com/repos/" BANG_SDL_REPO_NAME "/git/trees/%s"
 #endif
 
 #define WM_INSTALL_FINISHED WM_USER + 1
@@ -154,7 +155,7 @@ int get_cards_latest_version() {
     int errcode;
     char buffer[STRING_SIZE];
 
-    snprintf(buffer, STRING_SIZE, GITHUB_RELEASES_ENDPOINT, bang_zip_information.commit);
+    snprintf(buffer, STRING_SIZE, GITHUB_COMMIT_ENDPOINT, bang_zip_information.commit);
     errcode = download_file(&mem, buffer, download_query_size, NULL, NULL);
     if (errcode == error_ok) {
         cJSON *json = cJSON_ParseWithLength(mem.data, mem.size);
@@ -200,7 +201,7 @@ int get_cards_latest_version() {
 int get_bang_latest_version() {
     memory mem;
     
-    int errcode = download_file(&mem, "https://api.github.com/repos/salvoilmiosi/bang-sdl/releases/latest", download_query_size, NULL, NULL);
+    int errcode = download_file(&mem, GITHUB_RELEASE_ENDPOINT, download_query_size, NULL, NULL);
     if (errcode == error_ok) {
         cJSON *json = cJSON_ParseWithLength(mem.data, mem.size);
         free(mem.data);
