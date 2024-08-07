@@ -32,3 +32,10 @@ target_link_libraries(banglauncher libzip::zip cjson_static shlwapi wininet comc
 if (CMAKE_BUILD_TYPE STREQUAL "Debug")
     target_link_options(banglauncher PRIVATE -mconsole)
 endif()
+
+set(BANG_SDL_REPO_NAME "" CACHE STRING "github repository name for bang-sdl")
+if (BANG_SDL_REPO_NAME)
+    target_compile_definitions(banglauncher PRIVATE "BANG_SDL_REPO_NAME=\"${BANG_SDL_REPO_NAME}\"")
+else()
+    message(SEND_ERROR "Must specify BANG_SDL_REPO_NAME variable")
+endif()

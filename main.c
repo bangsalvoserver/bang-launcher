@@ -7,7 +7,11 @@
 #include "sys_windows.h"
 #include "resources.h"
 
-#define BANG_SDL_GITHUB_API_ENDPOINT "https://api.github.com/repos/bangsalvoserver/bang-sdl/git/trees/%s"
+#ifndef BANG_SDL_REPO_NAME
+#error "Must specify BANG_SDL_REPO_NAME"
+#else
+#define GITHUB_RELEASES_ENDPOINT "https://api.github.com/repos/" BANG_SDL_REPO_NAME "/git/trees/%s"
+#endif
 
 #define WM_INSTALL_FINISHED WM_USER + 1
 #define WM_INSTALL_FAILED   WM_USER + 2
@@ -150,7 +154,7 @@ int get_cards_latest_version() {
     int errcode;
     char buffer[STRING_SIZE];
 
-    snprintf(buffer, STRING_SIZE, BANG_SDL_GITHUB_API_ENDPOINT, bang_zip_information.commit);
+    snprintf(buffer, STRING_SIZE, GITHUB_RELEASES_ENDPOINT, bang_zip_information.commit);
     errcode = download_file(&mem, buffer, download_query_size, NULL, NULL);
     if (errcode == error_ok) {
         cJSON *json = cJSON_ParseWithLength(mem.data, mem.size);
